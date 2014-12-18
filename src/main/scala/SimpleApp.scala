@@ -25,7 +25,6 @@
 
 import scala.collection.mutable.SynchronizedQueue
 import org.apache.spark.SparkContext
-import org.apache.spark.SparkConf
 import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming._
 import org.json4s.jackson.JsonMethods
@@ -81,24 +80,22 @@ object SimpleApp {
   def main(args: Array[String]) {
 
     // Create the contexts
-    val sparkConf = new SparkConf().setAppName("Queue Stream")
-    val sc = new SparkContext(sparkConf)
+    val sc = new SparkContext()
     val ssc = new StreamingContext(sc, Seconds(5))
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
     import sqlContext._
 
     // Create the queue through which RDDs can be pushed to
     // a QueueInputDStream
-    val rddQueue = new SynchronizedQueue[RDD[List[BigDecimal]]]()
+    val rddQueue = new SynchronizedQueue[RDD[List[List[BigDecimal]]]]()
 
     var globalMax: BigDecimal = 0
 
     // Create the QueueInputDStream and use it do some processing
     val inputStream = ssc.queueStream(rddQueue)
     inputStream.foreachRDD(rdd => {
-      println("Max: " + globalMax)
       val memoryusage = rdd.map(p => MemoryUsage(BigDecimal(p(0).asInstanceOf[BigInt]), BigDecimal(p(2).asInstanceOf[BigInt])))
-      memoryusage.registerAsTable("memoryusage")
+      memoryusage.registerTempTable("memoryusage")
       val newestMax = sqlContext.sql("select max(memory) from memoryusage").first()
       println(newestMax)
       globalMax = BigDecimal(newestMax(0).toString)
@@ -126,8 +123,8 @@ object SimpleApp {
       val points = json \\ "points"
       val mypoints = points.values
       val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
-
       rddQueue += rdd
+
       Thread.sleep(5000)
     }
 
