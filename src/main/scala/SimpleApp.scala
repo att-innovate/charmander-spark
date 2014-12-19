@@ -63,29 +63,31 @@ object SimpleApp {
       return in.readLine()
   }
 
-  def getMeteredTaskNamesFromRedis(): List[String] = {
-    var tasks = mutable.Set[String]()
-    val socket = new Socket(REDIS_HOST, REDIS_PORT)
-    var out = new PrintWriter(socket.getOutputStream(), true)
-    var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
-    out.println("*2\r\n$4\r\nKEYS\r\n$26\r\ncharmander:tasks-metered:*\r\n")
-    val numberOfResultsRaw: String = in.readLine()
-    if ( numberOfResultsRaw == "*0") {
+  def getMeteredTaskNamesFromRedis(): List[String] = try {
+      var tasks = mutable.Set[String]()
+      val socket = new Socket(REDIS_HOST, REDIS_PORT)
+      var out = new PrintWriter(socket.getOutputStream(), true)
+      var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+      out.println("*2\r\n$4\r\nKEYS\r\n$26\r\ncharmander:tasks-metered:*\r\n")
+      val numberOfResultsRaw: String = in.readLine()
+      if ( numberOfResultsRaw == "*0") {
+        return tasks.toList
+      }
+
+      val numberOfResults = (numberOfResultsRaw.substring(1)).toInt
+      for (i <- 1 to numberOfResults) {
+        in.readLine() // we don't care abput the length
+        val taskNameRaw = in.readLine()
+        val taskName = taskNameRaw slice ((taskNameRaw lastIndexOf(':'))+1, taskNameRaw lastIndexOf('-'))
+        tasks += taskName
+      }
+
       return tasks.toList
-    }
-
-    val numberOfResults = (numberOfResultsRaw.substring(1)).toInt
-    for (i <- 1 to numberOfResults) {
-      in.readLine() // we don't care abput the length
-      val taskNameRaw = in.readLine()
-      val taskName = taskNameRaw slice ((taskNameRaw lastIndexOf(':'))+1, taskNameRaw lastIndexOf('-'))
-      tasks += taskName
-    }
-
-    return tasks.toList
+  } catch {
+    case e: java.net.ConnectException => return List[String]()
   }
 
-  def sendQueryStringToOpenInfluxDB(query: String): String = {
+  def sendQueryStringToOpenInfluxDB(query: String): String = try {
     val in = scala.io.Source.fromURL("http://"
       + INFLUXDB_HOST
       + ":"
@@ -97,6 +99,9 @@ object SimpleApp {
     for (line <- in.getLines)
       data = line
     return data
+  } catch {
+    case e: IOException => return ""
+    case e: java.net.ConnectException => return ""
   }
 
   def main(args: Array[String]) {
@@ -142,16 +147,18 @@ object SimpleApp {
       val taskNamesMetered = getMeteredTaskNamesFromRedis()
 
       for {taskNameMetered <- taskNamesMetered} {
-        println(taskNameMetered)
         val rawData = sendQueryStringToOpenInfluxDB("select memory_usage from stats where container_name =~ /" + taskNameMetered + "*/ limit 100")
-        val json = JsonMethods.parse(rawData)
-        val points = json \\ "points"
-        val mypoints = points.values
+        if (rawData.length > 0) {
+          val json = JsonMethods.parse(rawData)
+          val points = json \\ "points"
+          val mypoints = points.values
 
-        if (points.values.isInstanceOf[List[Any]]) {
-          val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
-          rdd.setName(taskNameMetered)
-          rddQueue += rdd
+          if (points.values.isInstanceOf[List[Any]]) {
+            val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
+            rdd.setName(taskNameMetered)
+            rddQueue += rdd
+            println(taskNameMetered)
+          }
         }
       }
 
