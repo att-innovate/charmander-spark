@@ -103,7 +103,7 @@ object SimpleApp {
 
     // Create the contexts
     val sc = new SparkContext()
-    val ssc = new StreamingContext(sc, Seconds(5))
+    val ssc = new StreamingContext(sc, Seconds(2))
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
     import sqlContext._
 
@@ -155,7 +155,7 @@ object SimpleApp {
         }
       }
 
-      Thread.sleep(5000)
+      Thread.sleep(15000)
     }
 
   }
