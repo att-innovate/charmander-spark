@@ -24,7 +24,7 @@
 // ../spark/bin/spark-submit --class "SimpleApp --master local[*]  target/scala-2.10/simple-project_2.10-1.0.jar
 
 import scala.collection.mutable
-import org.apache.spark.SparkContext
+import org.apache.spark.{SparkConf, SparkContext}
 import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming._
 import org.json4s.jackson.JsonMethods
@@ -107,7 +107,8 @@ object SimpleApp {
   def main(args: Array[String]) {
 
     // Create the contexts
-    val sc = new SparkContext()
+    val conf = new SparkConf().setAppName("Charmander-Spark")
+    val sc = new SparkContext(conf)
     val ssc = new StreamingContext(sc, Seconds(2))
     val sqlContext = new org.apache.spark.sql.SQLContext(sc)
     import sqlContext._
