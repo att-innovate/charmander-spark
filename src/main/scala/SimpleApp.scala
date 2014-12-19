@@ -23,7 +23,7 @@
 
 // ../spark/bin/spark-submit --class "SimpleApp --master local[*]  target/scala-2.10/simple-project_2.10-1.0.jar
 
-import scala.collection.mutable.SynchronizedQueue
+import scala.collection.mutable
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 import org.apache.spark.streaming._
@@ -63,6 +63,28 @@ object SimpleApp {
       return in.readLine()
   }
 
+  def getMeteredTaskNamesFromRedis(): List[String] = {
+    var tasks = mutable.Set[String]()
+    val socket = new Socket(REDIS_HOST, REDIS_PORT)
+    var out = new PrintWriter(socket.getOutputStream(), true)
+    var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+    out.println("*2\r\n$4\r\nKEYS\r\n$26\r\ncharmander:tasks-metered:*\r\n")
+    val numberOfResultsRaw: String = in.readLine()
+    if ( numberOfResultsRaw == "*0") {
+      return tasks.toList
+    }
+
+    val numberOfResults = (numberOfResultsRaw.substring(1)).toInt
+    for (i <- 1 to numberOfResults) {
+      in.readLine() // we don't care abput the length
+      val taskNameRaw = in.readLine()
+      val taskName = taskNameRaw slice ((taskNameRaw lastIndexOf(':'))+1, taskNameRaw lastIndexOf('-'))
+      tasks += taskName
+    }
+
+    return tasks.toList
+  }
+
   def sendQueryStringToOpenInfluxDB(query: String): String = {
     val in = scala.io.Source.fromURL("http://"
       + INFLUXDB_HOST
@@ -87,43 +109,51 @@ object SimpleApp {
 
     // Create the queue through which RDDs can be pushed to
     // a QueueInputDStream
-    val rddQueue = new SynchronizedQueue[RDD[List[List[BigDecimal]]]]()
-
-    var globalMax: BigDecimal = 0
+    val rddQueue = new mutable.SynchronizedQueue[RDD[List[BigDecimal]]]()
 
     // Create the QueueInputDStream and use it do some processing
     val inputStream = ssc.queueStream(rddQueue)
     inputStream.foreachRDD(rdd => {
-      val memoryusage = rdd.map(p => MemoryUsage(BigDecimal(p(0).asInstanceOf[BigInt]), BigDecimal(p(2).asInstanceOf[BigInt])))
-      memoryusage.registerTempTable("memoryusage")
-      val newestMax = sqlContext.sql("select max(memory) from memoryusage").first()
-      println(newestMax)
-      globalMax = BigDecimal(newestMax(0).toString)
+      if (rdd.count != 0) {
+        val memoryusage = rdd.map(p => MemoryUsage(BigDecimal(p(0).asInstanceOf[BigInt]), BigDecimal(p(2).asInstanceOf[BigInt])))
+        memoryusage.registerTempTable("memoryusage")
+        val newestMaxRaw = sqlContext.sql("select max(memory) from memoryusage").first()
+        println(newestMaxRaw)
+        val newestMax = BigDecimal(newestMaxRaw(0).toString)
 
-      val maxMemUse = getFromRedis("SPARK_MAX")
-      if (maxMemUse != "") {
-        //application exists in redis
-        if (BigDecimal(maxMemUse) < globalMax) {
-          //only set if current max > all-time max
-          setToRedis("SPARK_ADJUSTED", (globalMax * 1.1).toInt.toString)
-          setToRedis("SPARK_MAX", globalMax.toString)
+        val redisKey = "charmander:task-intelligence:" + rdd.name + ":mem"
+        val maxMemUse = getFromRedis("SPARK_MAX")
+
+        if (maxMemUse != "") {
+          //task exists in redis
+          if (BigDecimal(maxMemUse) < newestMax) {
+            setToRedis(redisKey, newestMax.toString)
+          }
+        } else {
+          //task does not exist in redis
+          setToRedis(redisKey, newestMax.toString)
         }
-      } else {
-        //application does not exist in redis
-        setToRedis("SPARK_MAX", globalMax.toString)
-        if (globalMax > 0) setToRedis("SPARK_ADJUSTED", (globalMax * 1.1).toInt.toString)
       }
     })
     ssc.start()
 
 
     while (true) {
-      val rawData = sendQueryStringToOpenInfluxDB("select memory_usage from stats limit 10")
-      val json = JsonMethods.parse(rawData)
-      val points = json \\ "points"
-      val mypoints = points.values
-      val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
-      rddQueue += rdd
+      val taskNamesMetered = getMeteredTaskNamesFromRedis()
+
+      for {taskNameMetered <- taskNamesMetered} {
+        println(taskNameMetered)
+        val rawData = sendQueryStringToOpenInfluxDB("select memory_usage from stats where container_name =~ /" + taskNameMetered + "*/ limit 100")
+        val json = JsonMethods.parse(rawData)
+        val points = json \\ "points"
+        val mypoints = points.values
+
+        if (points.values.isInstanceOf[List[Any]]) {
+          val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
+          rdd.setName(taskNameMetered)
+          rddQueue += rdd
+        }
+      }
 
       Thread.sleep(5000)
     }
