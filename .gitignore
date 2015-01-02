@@ -12,9 +12,6 @@
 .settings
 .classpath
 .project
-.ensime*
-*.sublime-*
-.cache
 .lib
 
 project
