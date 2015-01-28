@@ -38,7 +38,7 @@ class CharmanderException(msg: String) extends RuntimeException(msg)
 trait CharmanderUtils {
   def getMeteredTaskNamesFromRedis(): List[String]
   def getRDDForTask(sc: SparkContext, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
-  def getRDDForNode(sc: SparkContext, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+  def getRDDForNode(sc: SparkContext, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def setTaskIntelligence(taskName: String, attributeName: String, value: String)
   def getTaskIntelligence(taskName: String, attributeName: String): String
 
