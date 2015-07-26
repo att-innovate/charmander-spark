@@ -39,13 +39,15 @@ trait CharmanderUtils {
   def getMeteredTaskNamesFromRedis(): List[String]
   def getRDDForTask(sc: SparkContext, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def getRDDForNode(sc: SparkContext, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+  def getRDDForTask(sc: SparkContext, databaseName: String, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+  def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def setTaskIntelligence(taskName: String, attributeName: String, value: String)
   def getTaskIntelligence(taskName: String, attributeName: String): String
 
   def setInRedis(key: String, value: String)
   def getFromRedis(key: String): String
-  def getRDDForQuery(sc: SparkContext, sqlQuery: String): RDD[List[BigDecimal]]
-  def sendQueryToInfluxDB(query: String): String
+  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): RDD[List[BigDecimal]]
+  def sendQueryToInfluxDB(databaseName: String, query: String): String
 }
 
 
@@ -55,6 +57,7 @@ object CharmanderUtils {
   val REDIS_PORT = 31600
   val INFLUXDB_HOST = "172.31.2.11"
   val INFLUXDB_PORT = 31410
+  val CADVISOR_DB = "Charmander"
 
 
   def getMeteredTaskNamesFromRedis(): List[String] = try {
@@ -84,15 +87,23 @@ object CharmanderUtils {
 
 
   def getRDDForTask(sc: SparkContext, taskName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    getRDDForTask(sc, CADVISOR_DB, taskName, influxDBstatsName, numberOfPoints)
+  }
+
+  def getRDDForTask(sc: SparkContext, databaseName: String, taskName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
     val sqlQuery = "select %s from stats where container_name =~ /%s*/ limit %d".format(influxDBstatsName, taskName, numberOfPoints)
-    val result = getRDDForQuery(sc, sqlQuery)
+    val result = getRDDForQuery(sc, databaseName, sqlQuery)
     result.setName(taskName)
     result
   }
 
   def getRDDForNode(sc: SparkContext, nodeName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    getRDDForNode(sc, CADVISOR_DB, nodeName, influxDBstatsName, numberOfPoints)
+  }
+
+  def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
     val sqlQuery = "select %s from machine where hostname = '%s' limit %d".format(influxDBstatsName, nodeName, numberOfPoints)
-    val result = getRDDForQuery(sc, sqlQuery)
+    val result = getRDDForQuery(sc, databaseName, sqlQuery)
     result.setName(nodeName)
     result
   }
@@ -128,8 +139,8 @@ object CharmanderUtils {
     in.readLine()
   }
 
-  def getRDDForQuery(sc: SparkContext, sqlQuery: String): RDD[List[BigDecimal]] = {
-    val rawData = CharmanderUtils.sendQueryToInfluxDB(sqlQuery)
+  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): RDD[List[BigDecimal]] = {
+    val rawData = CharmanderUtils.sendQueryToInfluxDB(databaseName,sqlQuery)
     if (rawData.length == 0) return sc.emptyRDD
 
     val json = JsonMethods.parse(rawData)
@@ -143,12 +154,12 @@ object CharmanderUtils {
     return rdd
   }
 
-  def sendQueryToInfluxDB(query: String): String = try {
+  def sendQueryToInfluxDB(databaseName: String, query: String): String = try {
     val in = scala.io.Source.fromURL("http://"
       + INFLUXDB_HOST
       + ":"
       + INFLUXDB_PORT
-      + "/db/charmander/series?u=root&p=root&q="
+      + "/db/"+databaseName+"/series?u=root&p=root&q="
       + java.net.URLEncoder.encode(query),
       "utf-8")
     var data = ""
