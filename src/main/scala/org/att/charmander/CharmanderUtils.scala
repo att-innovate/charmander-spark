@@ -25,7 +25,7 @@ package org.att.charmander
 import org.apache.spark.SparkContext
 import org.apache.spark.rdd.RDD
 
-import java.io.{BufferedReader, IOException, InputStreamReader, PrintWriter}
+import java.io.{BufferedReader, IOException, InputStreamReader, PrintWriter, File}
 import java.net.Socket
 
 import org.json4s.jackson.JsonMethods
@@ -43,6 +43,8 @@ trait CharmanderUtils {
   def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def setTaskIntelligence(taskName: String, attributeName: String, value: String)
   def getTaskIntelligence(taskName: String, attributeName: String): String
+
+  def exportDataToCSV(databaseName: String, sqlQuery: String, fileName: String)
 
   def setInRedis(key: String, value: String)
   def getFromRedis(key: String): String
@@ -118,6 +120,39 @@ object CharmanderUtils {
     getFromRedis(redisKey)
   }
 
+  def exportDataToCSV(databaseName: String, sqlQuery: String, fileName: String) = {
+    val writer = new PrintWriter(new File(fileName))
+
+    val rawData = CharmanderUtils.sendQueryToInfluxDB(databaseName,sqlQuery)
+    if (rawData.length != 0) {
+      val json = JsonMethods.parse(rawData)
+      val columns = (json \\ "columns").values
+      val points  = (json \\ "points").values
+
+      // handle header
+      var header = ""
+      for (columnName <- columns.asInstanceOf[List[String]]) {
+        if (header != "") header = header + ","
+
+        header = header + columnName
+      }
+
+      writer.println(header)
+
+      for (point <- points.asInstanceOf[List[Any]]) {
+        var line = ""
+        for (elmt <- point.asInstanceOf[List[Any]]) {
+          if (line != "") line = line + ","
+
+          line = line + elmt.toString()
+        }
+        writer.println(line)
+      }
+
+    }
+
+    writer.close()
+  }
 
 
   def setInRedis(key: String, value: String) = {
