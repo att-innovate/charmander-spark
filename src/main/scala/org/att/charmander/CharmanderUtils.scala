@@ -68,7 +68,9 @@ object CharmanderUtils {
   val REDIS_PORT = 31600
   val INFLUXDB_HOST = "172.31.2.11"
   val INFLUXDB_PORT = 31410
+
   val CADVISOR_DB = "Charmander"
+  val VECTOR_DB = "charmander-dc"
 
 
   def getMeteredTaskNamesFromRedis: List[String] = try {
