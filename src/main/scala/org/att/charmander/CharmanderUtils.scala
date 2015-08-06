@@ -36,19 +36,28 @@ import scala.collection.mutable
 class CharmanderException(msg: String) extends RuntimeException(msg)
 
 trait CharmanderUtils {
-  def getMeteredTaskNamesFromRedis(): List[String]
+  def getMeteredTaskNamesFromRedis: List[String]
+
+  // v1, cAdvisor only
   def getRDDForTask(sc: SparkContext, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def getRDDForNode(sc: SparkContext, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+
+  // v2
   def getRDDForTask(sc: SparkContext, databaseName: String, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
   def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+  def getRDDForNetwork(sc: SparkContext, databaseName: String, nodeName: String, networkInterface: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]]
+
+  def getRDDAndColumnsForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): (List[String], RDD[List[BigDecimal]])
+
   def setTaskIntelligence(taskName: String, attributeName: String, value: String)
   def getTaskIntelligence(taskName: String, attributeName: String): String
 
   def exportDataToCSV(databaseName: String, sqlQuery: String, fileName: String)
 
+  // internal
   def setInRedis(key: String, value: String)
   def getFromRedis(key: String): String
-  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): RDD[List[BigDecimal]]
+  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): (List[String], RDD[List[BigDecimal]])
   def sendQueryToInfluxDB(databaseName: String, query: String): String
 }
 
@@ -62,53 +71,66 @@ object CharmanderUtils {
   val CADVISOR_DB = "Charmander"
 
 
-  def getMeteredTaskNamesFromRedis(): List[String] = try {
+  def getMeteredTaskNamesFromRedis: List[String] = try {
     var tasks = mutable.Set[String]()
     val socket = new Socket(REDIS_HOST, REDIS_PORT)
-    var out = new PrintWriter(socket.getOutputStream(), true)
-    var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+    var out = new PrintWriter(socket.getOutputStream, true)
+    var in = new BufferedReader(new InputStreamReader(socket.getInputStream))
     out.println("*2\r\n$4\r\nKEYS\r\n$26\r\ncharmander:tasks-metered:*\r\n")
     val numberOfResultsRaw: String = in.readLine()
     if (numberOfResultsRaw == "*0") {
       return tasks.toList
     }
 
-    val numberOfResults = (numberOfResultsRaw.substring(1)).toInt
+    val numberOfResults = numberOfResultsRaw.substring(1).toInt
     for (i <- 1 to numberOfResults) {
       in.readLine() // we don't care about the length
       val taskNameRaw = in.readLine()
-      val taskName = taskNameRaw slice((taskNameRaw lastIndexOf (':')) + 1, taskNameRaw lastIndexOf ('-'))
+      val taskName = taskNameRaw slice((taskNameRaw lastIndexOf ':') + 1, taskNameRaw lastIndexOf '-')
       tasks += taskName
     }
 
     tasks.toList
 
   } catch {
-    case e: java.net.ConnectException => return List[String]()
+    case e: java.net.ConnectException => List[String]()
   }
 
 
-  def getRDDForTask(sc: SparkContext, taskName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
-    getRDDForTask(sc, CADVISOR_DB, taskName, influxDBstatsName, numberOfPoints)
+  def getRDDForTask(sc: SparkContext, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    getRDDForTask(sc, CADVISOR_DB, taskName, attributeName, numberOfPoints)
   }
 
-  def getRDDForTask(sc: SparkContext, databaseName: String, taskName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
-    val sqlQuery = "select %s from stats where container_name =~ /%s*/ limit %d".format(influxDBstatsName, taskName, numberOfPoints)
-    val result = getRDDForQuery(sc, databaseName, sqlQuery)
+  def getRDDForTask(sc: SparkContext, databaseName: String, taskName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    val sqlQuery = "select %s from stats where container_name =~ /%s*/ limit %d".format(attributeName, taskName, numberOfPoints)
+    val (_, result) = getRDDForQuery(sc, databaseName, sqlQuery)
     result.setName(taskName)
     result
   }
 
-  def getRDDForNode(sc: SparkContext, nodeName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
-    getRDDForNode(sc, CADVISOR_DB, nodeName, influxDBstatsName, numberOfPoints)
+  def getRDDForNode(sc: SparkContext, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    getRDDForNode(sc, CADVISOR_DB, nodeName, attributeName, numberOfPoints)
   }
 
-  def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, influxDBstatsName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
-    val sqlQuery = "select %s from machine where hostname = '%s' limit %d".format(influxDBstatsName, nodeName, numberOfPoints)
-    val result = getRDDForQuery(sc, databaseName, sqlQuery)
+  def getRDDForNode(sc: SparkContext, databaseName: String, nodeName: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    val sqlQuery = "select %s from machine where hostname = '%s' limit %d".format(attributeName, nodeName, numberOfPoints)
+    val (_, result) = getRDDForQuery(sc, databaseName, sqlQuery)
     result.setName(nodeName)
     result
   }
+
+  def getRDDForNetwork(sc: SparkContext, databaseName: String, nodeName: String, networkInterface: String, attributeName: String, numberOfPoints: Int): RDD[List[BigDecimal]] = {
+    val sqlQuery = "select %s from network where hostname = '%s' and interface_name = '%s' limit %d".format(attributeName, nodeName, networkInterface, numberOfPoints)
+    val (_, result) = getRDDForQuery(sc, databaseName, sqlQuery)
+    result.setName(networkInterface)
+    result
+  }
+
+  def getRDDAndColumnsForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): (List[String], RDD[List[BigDecimal]]) = {
+    getRDDForQuery(sc, databaseName, sqlQuery)
+  }
+
+
 
   def setTaskIntelligence(taskName: String, attributeName: String, value: String) = {
     val redisKey = "charmander:task-intelligence:" + taskName + ":"+attributeName
@@ -119,6 +141,7 @@ object CharmanderUtils {
     val redisKey = "charmander:task-intelligence:" + taskName + ":"+attributeName
     getFromRedis(redisKey)
   }
+
 
   def exportDataToCSV(databaseName: String, sqlQuery: String, fileName: String) = {
     val writer = new PrintWriter(new File(fileName))
@@ -144,7 +167,7 @@ object CharmanderUtils {
         for (elmt <- point.asInstanceOf[List[Any]]) {
           if (line != "") line = line + ","
 
-          line = line + elmt.toString()
+          line = line + elmt.toString
         }
         writer.println(line)
       }
@@ -155,10 +178,11 @@ object CharmanderUtils {
   }
 
 
+  // internal
   def setInRedis(key: String, value: String) = {
     val socket = new Socket(REDIS_HOST, REDIS_PORT)
-    var out = new PrintWriter(socket.getOutputStream(), true)
-    var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+    var out = new PrintWriter(socket.getOutputStream, true)
+    var in = new BufferedReader(new InputStreamReader(socket.getInputStream))
     out.println("*3\r\n$3\r\nSET\r\n$" + key.length.toString + "\r\n" + key + "\r\n$" + value.length.toString + "\r\n" + value + "\r\n")
     if (in.readLine() != "+OK")
       throw new CharmanderException("Could not set value in Redis.")
@@ -167,26 +191,25 @@ object CharmanderUtils {
   def getFromRedis(key: String): String = {
     val socket = new Socket(REDIS_HOST, REDIS_PORT)
     var out = new PrintWriter(socket.getOutputStream(), true)
-    var in = new BufferedReader(new InputStreamReader(socket.getInputStream()))
+    var in = new BufferedReader(new InputStreamReader(socket.getInputStream))
     out.println("*2\r\n$3\r\nGET\r\n$" + key.length.toString + "\r\n" + key + "\r\n")
     if (in.readLine().charAt(1) == '-') return "" //Redis responses with $-1 if no value found
 
     in.readLine()
   }
 
-  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): RDD[List[BigDecimal]] = {
+  def getRDDForQuery(sc: SparkContext, databaseName: String, sqlQuery: String): (List[String], RDD[List[BigDecimal]]) = {
     val rawData = CharmanderUtils.sendQueryToInfluxDB(databaseName,sqlQuery)
-    if (rawData.length == 0) return sc.emptyRDD
+    if (rawData.length == 0) return (List.empty[String], sc.emptyRDD)
 
     val json = JsonMethods.parse(rawData)
-    val points = json \\ "points"
-    val mypoints = points.values
 
-    if (points.values.isInstanceOf[List[Any]] == false) return sc.emptyRDD
+    val columns = (json \\ "columns").values
+    val points  = (json \\ "points").values
 
-    val rdd = sc.parallelize(mypoints.asInstanceOf[List[List[BigDecimal]]])
+    if (points.isInstanceOf[List[Any]] == false) return (List.empty[String], sc.emptyRDD)
 
-    return rdd
+    (columns.asInstanceOf[List[String]], sc.parallelize(points.asInstanceOf[List[List[BigDecimal]]]))
   }
 
   def sendQueryToInfluxDB(databaseName: String, query: String): String = try {
@@ -203,8 +226,8 @@ object CharmanderUtils {
     data
 
   } catch {
-    case e: IOException => return ""
-    case e: java.net.ConnectException => return ""
+    case e: IOException => ""
+    case e: java.net.ConnectException => ""
   }
 
 
